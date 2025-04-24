@@ -1,0 +1,25 @@
+{
+  "trailingComma": "none",
+  "plugins": ["@trivago/prettier-plugin-sort-imports"],
+  "importOrder": [
+    "^react$",
+    "^next$",
+    "^[^@./]",
+    "^@[^/]*$",
+    "^@[^/]+/[^/]+",
+    "^@/types",
+    "^@/lib",
+    "^@/context",
+    "^@/store",
+    "^@/components",
+    "^@",
+    "^\\.\\/",
+    "^(\\.\\.\\/){1}[^\\.]",
+    "^(\\.\\.\\/){2}[^\\.]",
+    "^(\\.\\.\\/){3}[^\\.]",
+    "^(\\.\\.\\/){4}[^\\.]"
+  ],
+  "importOrderGroupNamespaceSpecifiers": true,
+  "importOrderSeparation": false,
+  "importOrderSortSpecifiers": true
+}

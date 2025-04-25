@@ -15,9 +15,9 @@ export default function Home() {
     Array<{ role: "user" | "assistant"; content: string }>
   >([]);
   const [isRecording, setIsRecording] = useState(false);
+  const [isWarmingAssistant, setIsWarmingAssistant] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(null);
-  const [streamedResponse, setStreamedResponse] = useState<string>("");
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -29,7 +29,7 @@ export default function Home() {
       chatContainerRef.current.scrollTop =
         chatContainerRef.current.scrollHeight;
     }
-  }, [messages, streamedResponse]);
+  }, [messages]);
 
   // Initialize or get thread on component mount
   useEffect(() => {
@@ -37,11 +37,14 @@ export default function Home() {
       try {
         // Create a new thread only if we don't have one yet
         if (!threadId) {
+          console.time("Warming assistant");
           const thread = await openai.beta.threads.create();
           setThreadId(thread.id);
           console.log("Created new thread:", thread.id);
 
           const assistantResponse = await sendToAssistant("Hello", thread.id);
+          console.timeEnd("Warming assistant");
+          setIsWarmingAssistant(false);
           setMessages((prev) => [
             ...prev,
             { role: "assistant", content: assistantResponse }
@@ -124,7 +127,6 @@ export default function Home() {
         ...prev,
         { role: "assistant", content: assistantResponse }
       ]);
-      setStreamedResponse("");
       setIsLoading(false);
     } catch (error) {
       console.error("Error processing audio with OpenAI:", error);
@@ -161,8 +163,9 @@ export default function Home() {
               <div>
                 <h3 className="text-lg font-semibold">Welcome to DatePalm</h3>
                 <p className="text-base-content/70 mt-2">
-                  Tap the microphone button below to start sharing your
-                  thoughts.
+                  {isWarmingAssistant
+                    ? "Please wait while the assistant is warming up..."
+                    : "Tap the microphone button below to start sharing your thoughts"}
                 </p>
               </div>
             </div>
@@ -181,59 +184,64 @@ export default function Home() {
             ))
           )}
 
-          {/* Streaming response */}
-          {streamedResponse && (
-            <div className="chat chat-start">
-              <div className="chat-bubble chat-bubble-secondary">
-                {streamedResponse}
-              </div>
-            </div>
-          )}
-
           {/* Loading indicator */}
-          {isLoading && !streamedResponse && (
+          {isLoading && (
             <div className="chat chat-start">
               <div className="chat-bubble chat-bubble-secondary flex gap-1 items-center">
                 <span className="loading loading-dots loading-sm"></span>
               </div>
             </div>
           )}
+
+          {/* Loading indicator */}
+          {!isLoading && !isRecording && (
+            <div className="text-center text-base-content/50 italic text-sm mt-2">
+              Press the microphone button to respond
+            </div>
+          )}
         </div>
 
         {/* Recording controls */}
         <div className="p-4 border-t border-base-300 flex justify-center">
-          <button
-            onClick={isRecording ? stopRecording : startRecording}
-            className={`btn btn-circle ${isRecording ? "btn-error" : "btn-primary"} btn-lg`}
-            disabled={isLoading}
+          <div
+            className="tooltip"
+            data-tip={
+              isRecording ? "Press to Stop Recording" : "Press to Record"
+            }
           >
-            {isRecording ? (
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <rect x="6" y="6" width="12" height="12" strokeWidth="2" />
-              </svg>
-            ) : (
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                  d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
-                />
-              </svg>
-            )}
-          </button>
+            <button
+              onClick={isRecording ? stopRecording : startRecording}
+              className={`btn btn-circle ${isRecording ? "btn-error" : "btn-primary"} btn-lg`}
+              disabled={isLoading || isWarmingAssistant}
+            >
+              {isRecording ? (
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-6 w-6"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <rect x="6" y="6" width="12" height="12" strokeWidth="2" />
+                </svg>
+              ) : (
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-6 w-6"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
+                  />
+                </svg>
+              )}
+            </button>
+          </div>
         </div>
 
         {/* Recording status */}

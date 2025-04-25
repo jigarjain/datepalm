@@ -11,7 +11,9 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [assistantId] = useState<string | null>(
-    "asst_mz9EL6TLq5zy4OsBBJnsUhcQ"
+    (typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("aid")) ||
+      "asst_mz9EL6TLq5zy4OsBBJnsUhcQ"
   );
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);

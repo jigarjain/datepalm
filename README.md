@@ -5,18 +5,18 @@ DatePalm is a voice-based chat assistant that acts as a compassionate listener. 
 ## Features
 
 - Voice recording interface with a mobile-app style UI
-- Direct integration with OpenAI's APIs:
+- Secure server-side integration with OpenAI's APIs:
   - Audio transcription using Whisper
-  - Chat processing via the Assistants API with streaming responses
+  - Chat processing via the Assistants API
 - Maintains conversation context through OpenAI threads
-- Real-time response streaming as the AI responds
+- API keys securely kept on the server-side
 
 ## Tech Stack
 
 - **Language**: TypeScript
 - **Framework**: Next.js 15^ + React v19^
 - **Styling**: TailwindCSS + DaisyUI
-- **API Integration**: OpenAI SDK (direct client-side integration)
+- **API Integration**: OpenAI SDK (server-side implementation with API routes)
 - **Deployment**: Vercel + GitHub Actions
 
 ## Prerequisites
@@ -45,8 +45,8 @@ npm install
 Create a `.env.local` file in the root directory with the following:
 
 ```
-NEXT_PUBLIC_OPENAI_API_KEY=your_openai_api_key_here
-NEXT_PUBLIC_OPENAI_ASSISTANT_ID=your_assistant_id_here
+OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_ASSISTANT_ID=your_assistant_id_here
 ```
 
 4. Run the Next.js development server:
@@ -69,7 +69,7 @@ npm run dev
 
 ## Security Note
 
-This implementation uses client-side API calls with your OpenAI API key exposed in the browser. For production use, consider implementing a backend proxy to secure your API credentials.
+This implementation uses server-side API routes to securely communicate with OpenAI, keeping your API key safe from client-side exposure.
 
 ## License
 

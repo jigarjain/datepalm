@@ -230,6 +230,29 @@ export default function Home() {
 
   return (
     <div className="flex justify-center w-full min-h-screen bg-base-200 p-1">
+      <div className="fixed top-4 right-4 z-50">
+        <a
+          href="https://tally.so/r/mJGB4z"
+          className="btn btn-error shadow-lg"
+          aria-label="Submit feedback"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            className="h-6 w-6"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
+            />
+          </svg>
+          GiveFeedback
+        </a>
+      </div>
       <div className="container max-w-md flex flex-col h-screen bg-base-100 rounded-xl overflow-hidden shadow-xl">
         {/* Header */}
         <div className="bg-neutral text-neutral-content p-4 flex items-center gap-2">

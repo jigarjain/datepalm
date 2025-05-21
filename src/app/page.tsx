@@ -1,358 +1,272 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import ChatScreen, { type Messages } from "./components/ChatScreen";
+import NameScreen from "./components/NameScreen";
+import { UserData, getUserData, updateUserData } from "./lib/db";
+
+enum Screen {
+  NameScreen,
+  ChatScreen
+}
 
 export default function Home() {
-  const [messages, setMessages] = useState<
-    Array<{ role: "user" | "assistant"; content: string }>
-  >([]);
-  const [isRecording, setIsRecording] = useState(false);
-  const [isWarmingAssistant, setIsWarmingAssistant] = useState(true);
-  const [isLoading, setIsLoading] = useState(false);
-  const [threadId, setThreadId] = useState<string | null>(null);
-  const [assistantId] = useState<string | null>(
-    (typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("aid")) ||
-      "asst_mz9EL6TLq5zy4OsBBJnsUhcQ"
-  );
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const [userData, setUserData] = useState<UserData | null>(null);
+  const [screen, setScreen] = useState<Screen>(Screen.NameScreen);
+  const [isSessionStarted, setIsSessionStarted] = useState(false);
+  const [isSessionActive, setIsSessionActive] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [dataChannel, setDataChannel] = useState<RTCDataChannel | null>(null);
+  const peerConnection = useRef<RTCPeerConnection | null>(null);
+  const audioElement = useRef<HTMLAudioElement | null>(null);
+  const [audioStream, setAudioStream] = useState<MediaStream | null>(null);
+  const audioTransceiver = useRef<RTCRtpTransceiver | null>(null);
+  const tracks = useRef<RTCRtpSender[] | null>(null);
 
-  // Scroll to bottom of chat when messages change
-  useEffect(() => {
-    if (chatContainerRef.current) {
-      chatContainerRef.current.scrollTop =
-        chatContainerRef.current.scrollHeight;
-    }
-  }, [messages]);
+  const [messages, setMessages] = useState<Messages[]>([]);
 
-  // Initialize or get thread on component mount
-  useEffect(() => {
-    const initializeThread = async () => {
-      try {
-        // Create a new thread only if we don't have one yet
-        if (!threadId) {
-          // Replace direct OpenAI call with API route
-          const response = await fetch("/api/thread", {
-            method: "POST"
-          });
-          const data = await response.json();
-          setThreadId(data.threadId);
+  function getInstructionsForAssistant() {
+    return `
+      You are a relationship coach. You are helping ${userData?.name} who is in a relationship with ${userData?.partnerName} to improve their relationship.
+    `;
+  }
 
-          // Send initial message via API route
-          const messageRes = await fetch("/api/message", {
+  async function startSession() {
+    try {
+      if (!isSessionStarted) {
+        console.log("Starting session");
+        setIsSessionStarted(true);
+
+        const res = await fetch("/api/token", {
+          method: "POST"
+        });
+
+        const session = await res.json();
+
+        console.log("Session Received", session);
+
+        const pc = new RTCPeerConnection();
+
+        // Set up to play remote audio from the model
+        if (!audioElement.current) {
+          audioElement.current = document.createElement("audio");
+        }
+        audioElement.current.autoplay = true;
+        pc.ontrack = (e) => {
+          if (audioElement.current) {
+            audioElement.current.srcObject = e.streams[0];
+          }
+        };
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: true
+        });
+
+        stream.getTracks().forEach((track) => {
+          const sender = pc.addTrack(track, stream);
+          if (sender) {
+            tracks.current = [...(tracks.current || []), sender];
+          }
+        });
+
+        // Set up data channel for sending and receiving events
+        const dc = pc.createDataChannel("oai-events");
+        setDataChannel(dc);
+
+        // Start the session using the Session Description Protocol (SDP)
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        const sdpResponse = await fetch(
+          `https://api.openai.com/v1/realtime?model=${session.model}`,
+          {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              text: "Hello",
-              threadId: data.threadId,
-              assistantId: assistantId
-            })
-          });
-          const messageData = await messageRes.json();
-
-          setIsWarmingAssistant(false);
-          setMessages((prev) => [
-            ...prev,
-            { role: "assistant", content: messageData.response }
-          ]);
-        }
-      } catch (error) {
-        console.error("Error initializing thread:", error);
-      }
-    };
-
-    initializeThread();
-  }, [threadId, assistantId]);
-
-  const startRecording = async () => {
-    try {
-      audioChunksRef.current = [];
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
-
-      // Reset chunks on start
-      audioChunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          console.log("Audio chunk received, size:", event.data.size);
-          audioChunksRef.current.push(event.data);
-        }
-      };
-
-      // Add an onstop handler to process audio *after* recording stops
-      mediaRecorder.onstop = () => {
-        if (audioChunksRef.current.length > 0) {
-          processAudioWithOpenAI();
-        } else {
-          console.error("No audio chunks recorded.");
-          // Handle the case where no audio was recorded (e.g., show an error message)
-          setMessages((prev) => [
-            ...prev.slice(0, -1), // Remove the "Processing..." message
-            { role: "user", content: "No audio recorded. Please try again." },
-            {
-              role: "assistant",
-              content: "I didn't hear anything. Could you try recording again?"
+            body: offer.sdp,
+            headers: {
+              Authorization: `Bearer ${session.client_secret.value}`,
+              "Content-Type": "application/sdp"
             }
-          ]);
-          setIsLoading(false);
+          }
+        );
+
+        const answer: RTCSessionDescriptionInit = {
+          type: "answer",
+          sdp: await sdpResponse.text()
+        };
+
+        console.log(answer);
+        await pc.setRemoteDescription(answer);
+
+        peerConnection.current = pc;
+      }
+    } catch (err) {
+      console.error("Error starting session:", err);
+    }
+  }
+
+  function stopSession() {
+    dataChannel?.send(
+      JSON.stringify({
+        type: "response"
+      })
+    );
+    if (dataChannel) {
+      dataChannel.close();
+    }
+    if (peerConnection.current) {
+      peerConnection.current.close();
+    }
+
+    setIsSessionStarted(false);
+    setIsSessionActive(false);
+    setDataChannel(null);
+    peerConnection.current = null;
+    if (audioStream) {
+      audioStream.getTracks().forEach((track) => track.stop());
+    }
+    setAudioStream(null);
+    setIsListening(false);
+    setIsSpeaking(false);
+    audioTransceiver.current = null;
+  }
+
+  // Send a message to the model
+  const sendClientEvent = useCallback(
+    (message: Record<string, unknown>) => {
+      if (dataChannel) {
+        message.event_id = message.event_id || crypto.randomUUID();
+        dataChannel.send(JSON.stringify(message));
+      } else {
+        console.error(
+          "Failed to send message - no data channel available",
+          message
+        );
+      }
+    },
+    [dataChannel]
+  );
+
+  // Attach event listeners to the data channel when a new one is created
+  useEffect(() => {
+    if (!dataChannel) {
+      return;
+    }
+
+    function handleDataChannelMessage(e: MessageEvent) {
+      const event = JSON.parse(e.data);
+      console.log("Recieved Event", event);
+
+      if (
+        event.type === "conversation.item.input_audio_transcription.completed"
+      ) {
+        setMessages([...messages, { role: "user", content: event.transcript }]);
+      }
+
+      if (event.type === "response.audio_transcript.done") {
+        setMessages([
+          ...messages,
+          { role: "assistant", content: event.transcript }
+        ]);
+      }
+
+      if (event.type === "output_audio_buffer.stopped") {
+        setIsSpeaking(false);
+        setIsListening(true);
+      }
+
+      if (event.type === "output_audio_buffer.started") {
+        setIsListening(false);
+        setIsSpeaking(true);
+      }
+    }
+
+    function handleDataChannelOpen() {
+      setIsSessionActive(true);
+      // Send session config
+      const sessionUpdate = {
+        type: "session.update",
+        session: {
+          instructions: getInstructionsForAssistant(),
+          turn_detection: {
+            prefix_padding_ms: 500,
+            silence_duration_ms: 1500,
+            threshold: 0.7,
+            type: "server_vad"
+          }
         }
       };
+      sendClientEvent(sessionUpdate);
+      console.log("Session update sent:", sessionUpdate);
 
-      mediaRecorder.start();
-      mediaRecorderRef.current = mediaRecorder;
-      setIsRecording(true);
-    } catch (error) {
-      console.error("Error accessing microphone:", error);
+      window.setTimeout(() => {
+        // Triggering the assistant to start the conversation
+        sendClientEvent({
+          type: "response.create"
+        });
+        console.log("Assistant triggered");
+      }, 500);
     }
+
+    dataChannel.addEventListener("message", handleDataChannelMessage);
+    dataChannel.addEventListener("open", handleDataChannelOpen);
+
+    return () => {
+      dataChannel.removeEventListener("message", handleDataChannelMessage);
+      dataChannel.removeEventListener("open", handleDataChannelOpen);
+    };
+  }, [dataChannel, sendClientEvent, getInstructionsForAssistant, setMessages]);
+
+  const updateNames = (name: string, partnerName: string) => {
+    const newUserData = {
+      ...userData,
+      name,
+      partnerName
+    };
+    updateUserData(newUserData);
+    setUserData(newUserData);
+    setScreen(Screen.ChatScreen);
   };
 
-  const stopRecording = async () => {
-    if (!mediaRecorderRef.current) return;
-
-    console.log("Stopping recording...");
-    mediaRecorderRef.current.stop(); // This will trigger the 'onstop' event handler
-    setIsRecording(false);
-
-    // Close audio tracks - moved here to ensure they are closed after stop
-    mediaRecorderRef.current.stream
-      .getTracks()
-      .forEach((track) => track.stop());
-
-    // Add a temporary user message
-    setMessages((prev) => [
-      ...prev,
-      { role: "user", content: "Processing your message..." }
-    ]);
-    setIsLoading(true);
-  };
-
-  const processAudioWithOpenAI = async () => {
-    try {
-      // Get the actual MIME type from the MediaRecorder
-      const mimeType = mediaRecorderRef.current?.mimeType || "audio/webm";
-      const fileExtension = mimeType.includes("webm")
-        ? "webm"
-        : mimeType.includes("mp4")
-          ? "mp4"
-          : mimeType.includes("ogg")
-            ? "ogg"
-            : mimeType.includes("wav")
-              ? "wav"
-              : "webm";
-
-      const audioBlob = new Blob(audioChunksRef.current, {
-        type: mimeType
-      });
-
-      console.log(
-        `Using audio format: ${mimeType}, extension: ${fileExtension}`
-      );
-
-      // Use new API route for transcription
-      const transcribedText = await transcribeAudioWithAPI(
-        audioBlob,
-        fileExtension
-      );
-
-      // Update user message with transcribed text
-      setMessages((prev) => {
-        const messages = [...prev];
-        // Replace the temporary message with the transcribed text
-        messages[messages.length - 1].content = transcribedText;
-        return messages;
-      });
-
-      // Use new API route for sending messages
-      const assistantResponse = await sendMessageToAssistant(
-        transcribedText,
-        threadId || ""
-      );
-
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: assistantResponse }
-      ]);
-      setIsLoading(false);
-    } catch (error) {
-      console.error("Error processing audio with OpenAI:", error);
-      setMessages((prev) => [
-        ...prev.slice(0, -1),
-        { role: "user", content: "Failed to process audio." },
-        {
-          role: "assistant",
-          content:
-            "Sorry, I had trouble processing your message. Could you try again?"
-        }
-      ]);
-      setIsLoading(false);
+  useEffect(() => {
+    // Update userData when the component mounts
+    const userData = getUserData();
+    if (userData) {
+      setUserData(userData);
     }
-  };
 
-  // New function to transcribe audio via API
-  const transcribeAudioWithAPI = async (audioBlob: Blob, extension: string) => {
-    const formData = new FormData();
-    // Specify the filename with correct extension to ensure the server recognizes it correctly
-    formData.append("file", audioBlob, `recording.${extension}`);
-
-    const response = await fetch("/api/transcribe", {
-      method: "POST",
-      body: formData
-    });
-
-    const data = await response.json();
-    if (data.error) {
-      throw new Error(data.error);
+    if (userData?.partnerName && userData?.name) {
+      setScreen(Screen.ChatScreen);
     }
-    return data.text || "No transcription returned";
-  };
+  }, []);
 
-  // New function to send messages to assistant via API
-  const sendMessageToAssistant = async (text: string, threadId: string) => {
-    const response = await fetch("/api/message", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text,
-        threadId,
-        assistantId: assistantId
-      })
-    });
-
-    const data = await response.json();
-    if (data.error) {
-      throw new Error(data.error);
+  const handleSessionToggle = () => {
+    if (isSessionActive) {
+      stopSession();
+    } else {
+      startSession();
     }
-    return data.response;
   };
 
   return (
     <div className="flex justify-center w-full min-h-screen bg-base-200">
-      <div className="fixed top-2 right-4 z-50">
-        <a
-          href="https://tally.so/r/mJGB4z"
-          className="btn btn-error shadow-lg"
-          aria-label="Submit feedback"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            className="h-6 w-6"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
-            />
-          </svg>
-          Feedback
-        </a>
-      </div>
       <div className="container max-w-lg flex flex-col h-screen bg-base-100 overflow-hidden shadow-xl">
-        {/* Header */}
-        <div className="bg-neutral text-neutral-content p-4 flex items-center gap-2">
-          <div className="flex-1">
-            <h1 className="text-xl font-bold">🌴 DatePalm</h1>
-          </div>
-        </div>
-
-        {/* Chat container */}
-        <div
-          ref={chatContainerRef}
-          className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 pb-24"
-        >
-          {messages.length === 0 ? (
-            <div className="flex-1 flex items-center justify-center text-center p-4">
-              <div>
-                <h3 className="text-lg font-semibold">Welcome to DatePalm</h3>
-                <p className="text-base-content/70 mt-2">
-                  {isWarmingAssistant
-                    ? "Please wait while the assistant is warming up..."
-                    : "Tap the microphone button below to start sharing your thoughts"}
-                </p>
-              </div>
-            </div>
-          ) : (
-            messages.map((message, index) => (
-              <div
-                key={index}
-                className={`chat ${message.role === "user" ? "chat-end" : "chat-start"}`}
-              >
-                <div
-                  className={`chat-bubble ${message.role === "user" ? "chat-bubble-primary" : "chat-bubble-secondary"}`}
-                >
-                  {message.content}
-                </div>
-              </div>
-            ))
-          )}
-
-          {/* Loading indicator */}
-          {isLoading && (
-            <div className="chat chat-start">
-              <div className="chat-bubble chat-bubble-secondary flex gap-1 items-center">
-                <span className="loading loading-dots loading-sm"></span>
-              </div>
-            </div>
-          )}
-
-          {/* Loading indicator */}
-          {!isLoading && !isRecording && (
-            <div className="text-center text-base-content/50 italic text-sm mt-2">
-              Press the microphone button to respond
-            </div>
-          )}
-        </div>
-
-        {/* Recording controls - Made Fixed */}
-        <div className="fixed bottom-0 left-0 right-0 mx-auto max-w-md bg-base-100 p-4 border-t border-base-300 flex justify-center rounded-b-xl">
-          <button
-            onClick={isRecording ? stopRecording : startRecording}
-            className={`btn btn-circle ${isRecording ? "btn-error" : "btn-primary"} btn-lg`}
-            disabled={isLoading || isWarmingAssistant}
-            title={isRecording ? "Press to Stop Recording" : "Press to Record"}
-          >
-            {isRecording ? (
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <rect x="6" y="6" width="12" height="12" strokeWidth="2" />
-              </svg>
-            ) : (
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                  d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
-                />
-              </svg>
-            )}
-          </button>
-        </div>
-
-        {/* Recording status - Adjusted position */}
-        {isRecording && (
-          <div className="absolute bottom-28 left-0 right-0 flex justify-center">
-            <div className="bg-error text-error-content px-4 py-2 rounded-full text-sm font-medium animate-pulse">
-              Recording...Press below to stop
-            </div>
-          </div>
+        {screen === Screen.NameScreen && (
+          <NameScreen
+            nameOfUser={userData?.name || ""}
+            nameOfPartner={userData?.partnerName || ""}
+            updateNames={updateNames}
+          />
+        )}
+        {screen === Screen.ChatScreen && (
+          <ChatScreen
+            messages={messages}
+            isSpeaking={isSpeaking}
+            isListening={isListening}
+            isSessionStarted={isSessionStarted}
+            isSessionActive={isSessionActive}
+            handleSessionToggle={handleSessionToggle}
+          />
         )}
       </div>
     </div>

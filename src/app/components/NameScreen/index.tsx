@@ -30,6 +30,7 @@ const NameScreen = ({
               type="text"
               name="name"
               defaultValue={nameOfUser}
+              required
               className="input input-lg bg-white text-black"
             />
             <h3 className="text-xl font-bold text-base-content mt-16">
@@ -39,13 +40,16 @@ const NameScreen = ({
               type="text"
               name="partnerName"
               defaultValue={nameOfPartner}
+              required
               className="input input-lg bg-white text-black"
             />
           </div>
         </div>
       </div>
       <div className="w-full p-4 mt-auto text-center border-t border-base-300 ">
-        <button className="btn btn-neutral btn-wide">Next</button>
+        <button className="btn btn-neutral btn-wide" type="submit">
+          Next
+        </button>
       </div>
     </form>
   );

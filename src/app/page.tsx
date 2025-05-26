@@ -10,126 +10,42 @@ enum Screen {
   ChatScreen
 }
 
+function getInstructionsForAssistant(userData: UserData) {
+  return `
+    You are a relationship coach.
+    You are helping ${userData?.name} who is in a relationship with ${userData?.partnerName} to improve their relationship.
+    Firstly, greet the user by addressing them by name & introduce yourself.
+    Keep your introductory message short and concise. Introduce yourself as a relationship coach and ask the user to start the conversation by clicking on the "Start Recording" button below
+  `;
+}
+
 export default function Home() {
   const [userData, setUserData] = useState<UserData | null>(null);
   const [screen, setScreen] = useState<Screen>(Screen.NameScreen);
   const [isSessionStarted, setIsSessionStarted] = useState(false);
   const [isSessionActive, setIsSessionActive] = useState(false);
-  const [isListening, setIsListening] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [dataChannel, setDataChannel] = useState<RTCDataChannel | null>(null);
+  const [hasAudioChunks, setHasAudioChunks] = useState(false);
   const peerConnection = useRef<RTCPeerConnection | null>(null);
   const audioElement = useRef<HTMLAudioElement | null>(null);
-  const [audioStream, setAudioStream] = useState<MediaStream | null>(null);
-  const audioTransceiver = useRef<RTCRtpTransceiver | null>(null);
-  const tracks = useRef<RTCRtpSender[] | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   const [messages, setMessages] = useState<Messages[]>([]);
 
-  function getInstructionsForAssistant() {
-    return `
-      You are a relationship coach. You are helping ${userData?.name} who is in a relationship with ${userData?.partnerName} to improve their relationship.
-    `;
-  }
-
-  async function startSession() {
-    try {
-      if (!isSessionStarted) {
-        console.log("Starting session");
-        setIsSessionStarted(true);
-
-        const res = await fetch("/api/token", {
-          method: "POST"
-        });
-
-        const session = await res.json();
-
-        console.log("Session Received", session);
-
-        const pc = new RTCPeerConnection();
-
-        // Set up to play remote audio from the model
-        if (!audioElement.current) {
-          audioElement.current = document.createElement("audio");
-        }
-        audioElement.current.autoplay = true;
-        pc.ontrack = (e) => {
-          if (audioElement.current) {
-            audioElement.current.srcObject = e.streams[0];
-          }
-        };
-
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: true
-        });
-
-        stream.getTracks().forEach((track) => {
-          const sender = pc.addTrack(track, stream);
-          if (sender) {
-            tracks.current = [...(tracks.current || []), sender];
-          }
-        });
-
-        // Set up data channel for sending and receiving events
-        const dc = pc.createDataChannel("oai-events");
-        setDataChannel(dc);
-
-        // Start the session using the Session Description Protocol (SDP)
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-
-        const sdpResponse = await fetch(
-          `https://api.openai.com/v1/realtime?model=${session.model}`,
-          {
-            method: "POST",
-            body: offer.sdp,
-            headers: {
-              Authorization: `Bearer ${session.client_secret.value}`,
-              "Content-Type": "application/sdp"
-            }
-          }
-        );
-
-        const answer: RTCSessionDescriptionInit = {
-          type: "answer",
-          sdp: await sdpResponse.text()
-        };
-
-        console.log(answer);
-        await pc.setRemoteDescription(answer);
-
-        peerConnection.current = pc;
-      }
-    } catch (err) {
-      console.error("Error starting session:", err);
-    }
-  }
-
-  function stopSession() {
-    dataChannel?.send(
-      JSON.stringify({
-        type: "response"
-      })
-    );
-    if (dataChannel) {
-      dataChannel.close();
-    }
-    if (peerConnection.current) {
-      peerConnection.current.close();
+  useEffect(() => {
+    // Update userData when the component mounts
+    const userData = getUserData();
+    if (userData) {
+      setUserData(userData);
     }
 
-    setIsSessionStarted(false);
-    setIsSessionActive(false);
-    setDataChannel(null);
-    peerConnection.current = null;
-    if (audioStream) {
-      audioStream.getTracks().forEach((track) => track.stop());
+    if (userData?.partnerName && userData?.name) {
+      // setScreen(Screen.ChatScreen);
     }
-    setAudioStream(null);
-    setIsListening(false);
-    setIsSpeaking(false);
-    audioTransceiver.current = null;
-  }
+  }, []);
 
   // Send a message to the model
   const sendClientEvent = useCallback(
@@ -160,23 +76,28 @@ export default function Home() {
       if (
         event.type === "conversation.item.input_audio_transcription.completed"
       ) {
-        setMessages([...messages, { role: "user", content: event.transcript }]);
+        setMessages((prevMessages) => [
+          ...prevMessages,
+          { role: "user", content: event.transcript }
+        ]);
       }
 
       if (event.type === "response.audio_transcript.done") {
-        setMessages([
-          ...messages,
+        console.log("Previous Messages", messages.length);
+        setMessages((prevMessages) => [
+          ...prevMessages,
           { role: "assistant", content: event.transcript }
         ]);
       }
 
-      if (event.type === "output_audio_buffer.stopped") {
+      if (
+        event.type === "output_audio_buffer.stopped"
+        // || event.type === "response.done"
+      ) {
         setIsSpeaking(false);
-        setIsListening(true);
       }
 
       if (event.type === "output_audio_buffer.started") {
-        setIsListening(false);
         setIsSpeaking(true);
       }
     }
@@ -187,12 +108,11 @@ export default function Home() {
       const sessionUpdate = {
         type: "session.update",
         session: {
-          instructions: getInstructionsForAssistant(),
-          turn_detection: {
-            prefix_padding_ms: 500,
-            silence_duration_ms: 1500,
-            threshold: 0.7,
-            type: "server_vad"
+          instructions: getInstructionsForAssistant(userData!),
+          modalities: ["text", "audio"],
+          turn_detection: null,
+          input_audio_transcription: {
+            model: "whisper-1"
           }
         }
       };
@@ -215,7 +135,190 @@ export default function Home() {
       dataChannel.removeEventListener("message", handleDataChannelMessage);
       dataChannel.removeEventListener("open", handleDataChannelOpen);
     };
-  }, [dataChannel, sendClientEvent, getInstructionsForAssistant, setMessages]);
+  }, [dataChannel, sendClientEvent, setMessages]);
+
+  const handleStartSession = useCallback(async () => {
+    try {
+      if (!isSessionStarted && !peerConnection.current) {
+        console.log("Starting session");
+        setIsSessionStarted(true);
+
+        const pc = new RTCPeerConnection();
+        peerConnection.current = pc;
+
+        const res = await fetch("/api/token", {
+          method: "POST"
+        });
+
+        const session = await res.json();
+        console.log("Session Received", session);
+
+        // Set up to play remote audio from the model
+        if (!audioElement.current) {
+          audioElement.current = document.createElement("audio");
+        }
+        audioElement.current.autoplay = true;
+        pc.ontrack = (e) => {
+          if (audioElement.current) {
+            audioElement.current.srcObject = e.streams[0];
+          }
+        };
+
+        // Add audio transceiver to ensure audio media section in the offer
+        pc.addTransceiver("audio", { direction: "recvonly" });
+
+        // Set up data channel for sending and receiving events
+        const dc = pc.createDataChannel("oai-events");
+        setDataChannel(dc);
+        console.log("Created data channel");
+
+        // Start the session using the Session Description Protocol (SDP)
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        const sdpResponse = await fetch(
+          `https://api.openai.com/v1/realtime?model=${session.model}`,
+          {
+            method: "POST",
+            body: offer.sdp,
+            headers: {
+              Authorization: `Bearer ${session.client_secret.value}`,
+              "Content-Type": "application/sdp"
+            }
+          }
+        );
+
+        const answer: RTCSessionDescriptionInit = {
+          type: "answer",
+          sdp: await sdpResponse.text()
+        };
+
+        await pc.setRemoteDescription(answer);
+        console.log("Set remote description");
+        console.log("Session started");
+      }
+    } catch (err) {
+      console.error("Error starting session:", err);
+    }
+  }, [isSessionStarted, peerConnection]);
+
+  function handleStopSession() {
+    if (dataChannel) {
+      dataChannel.close();
+    }
+    if (peerConnection.current) {
+      peerConnection.current.close();
+    }
+    if (audioElement.current) {
+      audioElement.current.srcObject = null;
+      audioElement.current.remove();
+      audioElement.current = null;
+    }
+
+    setIsSessionStarted(false);
+    setIsSessionActive(false);
+    setDataChannel(null);
+    setIsSpeaking(false);
+    setIsRecording(false);
+    handleStopRecording();
+    peerConnection.current = null;
+    audioChunksRef.current = [];
+  }
+
+  async function handleStartRecording() {
+    audioChunksRef.current = [];
+    setHasAudioChunks(false);
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        sampleRate: 24000,
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    });
+
+    const mediaRecorder = new MediaRecorder(stream, {
+      mimeType: "audio/webm;codecs=opus",
+      audioBitsPerSecond: 16000
+    });
+
+    mediaRecorder.ondataavailable = (event: BlobEvent) => {
+      if (event.data.size > 0) {
+        audioChunksRef.current.push(event.data);
+      }
+    };
+
+    mediaRecorder.onstop = () => {
+      if (audioChunksRef.current.length > 0) {
+        setHasAudioChunks(true);
+      }
+    };
+
+    mediaRecorder.start();
+    mediaRecorderRef.current = mediaRecorder;
+    setIsRecording(true);
+  }
+
+  function handleStopRecording() {
+    if (!mediaRecorderRef.current) return;
+
+    mediaRecorderRef.current.stop(); // This will trigger the 'onstop' event handler
+
+    // Close audio tracks - moved here to ensure they are closed after stop
+    mediaRecorderRef.current.stream
+      .getTracks()
+      .forEach((track) => track.stop());
+
+    setIsRecording(false);
+
+    console.log("Stopped recording");
+  }
+
+  async function handleSendMessage() {
+    const mimeType = mediaRecorderRef.current?.mimeType || "audio/webm";
+    const audioBlob = new Blob(audioChunksRef.current, {
+      type: mimeType
+    });
+
+    // Convert audio to the required format
+    const audioContext = new AudioContext({ sampleRate: 24000 });
+    const audioData = await audioBlob.arrayBuffer();
+    const audioBuffer = await audioContext.decodeAudioData(audioData);
+
+    // // Convert to mono and get raw PCM data
+    const monoChannel = audioBuffer.getChannelData(0);
+    const pcmData = new Int16Array(monoChannel.length);
+
+    // // Convert float32 to int16
+    for (let i = 0; i < monoChannel.length; i++) {
+      const s = Math.max(-1, Math.min(1, monoChannel[i]));
+      pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    }
+
+    // Convert to base64
+    const uint8Array = new Uint8Array(pcmData.buffer);
+    let binaryString = "";
+    for (let i = 0; i < uint8Array.length; i++) {
+      binaryString += String.fromCharCode(uint8Array[i]);
+    }
+    const base64Audio = btoa(binaryString);
+
+    console.log("Sending Audio Message");
+    sendClientEvent({
+      type: "input_audio_buffer.append",
+      audio: base64Audio
+    });
+    sendClientEvent({
+      type: "input_audio_buffer.commit"
+    });
+    sendClientEvent({
+      type: "response.create"
+    });
+
+    audioChunksRef.current = [];
+    setHasAudioChunks(false);
+  }
 
   const updateNames = (name: string, partnerName: string) => {
     const newUserData = {
@@ -226,26 +329,6 @@ export default function Home() {
     updateUserData(newUserData);
     setUserData(newUserData);
     setScreen(Screen.ChatScreen);
-  };
-
-  useEffect(() => {
-    // Update userData when the component mounts
-    const userData = getUserData();
-    if (userData) {
-      setUserData(userData);
-    }
-
-    if (userData?.partnerName && userData?.name) {
-      setScreen(Screen.ChatScreen);
-    }
-  }, []);
-
-  const handleSessionToggle = () => {
-    if (isSessionActive) {
-      stopSession();
-    } else {
-      startSession();
-    }
   };
 
   return (
@@ -262,10 +345,15 @@ export default function Home() {
           <ChatScreen
             messages={messages}
             isSpeaking={isSpeaking}
-            isListening={isListening}
+            isRecording={isRecording}
             isSessionStarted={isSessionStarted}
             isSessionActive={isSessionActive}
-            handleSessionToggle={handleSessionToggle}
+            hasAudioChunks={hasAudioChunks}
+            handleStartSession={handleStartSession}
+            handleStopSession={handleStopSession}
+            handleSendMessage={handleSendMessage}
+            handleStartRecording={handleStartRecording}
+            handleStopRecording={handleStopRecording}
           />
         )}
       </div>

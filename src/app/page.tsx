@@ -32,7 +32,6 @@ export default function Home() {
   const audioElement = useRef<HTMLAudioElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-
   const [messages, setMessages] = useState<Messages[]>([]);
 
   useEffect(() => {
@@ -71,7 +70,7 @@ export default function Home() {
 
     function handleDataChannelMessage(e: MessageEvent) {
       const event = JSON.parse(e.data);
-      console.log("Recieved Event", event);
+      console.log("Recieved Event", event.type);
 
       if (
         event.type === "conversation.item.input_audio_transcription.completed"
@@ -128,12 +127,20 @@ export default function Home() {
       }, 500);
     }
 
+    function handleDataChannelClose() {
+      console.log("Data Channel Closed");
+    }
+
+    console.log("Adding DataChannel Listeners");
     dataChannel.addEventListener("message", handleDataChannelMessage);
     dataChannel.addEventListener("open", handleDataChannelOpen);
+    dataChannel.addEventListener("close", handleDataChannelClose);
 
     return () => {
+      console.log("Removing DataChannel Listeners");
       dataChannel.removeEventListener("message", handleDataChannelMessage);
       dataChannel.removeEventListener("open", handleDataChannelOpen);
+      dataChannel.removeEventListener("close", handleDataChannelClose);
     };
   }, [dataChannel, sendClientEvent, setMessages]);
 
@@ -276,39 +283,52 @@ export default function Home() {
   }
 
   async function handleSendMessage() {
-    const mimeType = mediaRecorderRef.current?.mimeType || "audio/webm";
     const audioBlob = new Blob(audioChunksRef.current, {
-      type: mimeType
+      type: mediaRecorderRef.current?.mimeType || "audio/webm"
     });
 
-    // Convert audio to the required format
-    const audioContext = new AudioContext({ sampleRate: 24000 });
-    const audioData = await audioBlob.arrayBuffer();
-    const audioBuffer = await audioContext.decodeAudioData(audioData);
+    const audioContext = new OfflineAudioContext(1, 1, 24000);
+    const arrayBuffer = await audioBlob.arrayBuffer();
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+    const channelData = audioBuffer.getChannelData(0);
 
-    // // Convert to mono and get raw PCM data
-    const monoChannel = audioBuffer.getChannelData(0);
-    const pcmData = new Int16Array(monoChannel.length);
+    // Calculate chunk size to stay under 32KB
+    const maxBytesPerChunk = 32 * 1024; // 32KB
+    const samplesPerChunk = Math.floor(maxBytesPerChunk / 2.67); // Account for base64 overhead
 
-    // // Convert float32 to int16
-    for (let i = 0; i < monoChannel.length; i++) {
-      const s = Math.max(-1, Math.min(1, monoChannel[i]));
-      pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    console.log(
+      `Audio length: ${channelData.length} samples, chunking into ${samplesPerChunk} sample chunks`
+    );
+
+    for (let i = 0; i < channelData.length; i += samplesPerChunk) {
+      const chunk = channelData.slice(i, i + samplesPerChunk);
+      const pcmChunk = new Int16Array(chunk.length);
+
+      for (let j = 0; j < chunk.length; j++) {
+        const sample = Math.max(-1, Math.min(1, chunk[j]));
+        pcmChunk[j] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+      }
+
+      const base64Chunk = btoa(
+        new Uint8Array(pcmChunk.buffer).reduce(
+          (data, byte) => data + String.fromCharCode(byte),
+          ""
+        )
+      );
+
+      console.log(
+        `Sending chunk ${Math.floor(i / samplesPerChunk) + 1}, size: ${base64Chunk.length} bytes`
+      );
+
+      sendClientEvent({
+        type: "input_audio_buffer.append",
+        audio: base64Chunk
+      });
+
+      // Small delay between chunks to avoid overwhelming the channel
+      await new Promise((resolve) => setTimeout(resolve, 10));
     }
 
-    // Convert to base64
-    const uint8Array = new Uint8Array(pcmData.buffer);
-    let binaryString = "";
-    for (let i = 0; i < uint8Array.length; i++) {
-      binaryString += String.fromCharCode(uint8Array[i]);
-    }
-    const base64Audio = btoa(binaryString);
-
-    console.log("Sending Audio Message");
-    sendClientEvent({
-      type: "input_audio_buffer.append",
-      audio: base64Audio
-    });
     sendClientEvent({
       type: "input_audio_buffer.commit"
     });

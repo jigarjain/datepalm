@@ -1,6 +1,7 @@
 export interface UserData {
   name: string;
   partnerName: string;
+  email: string;
 }
 
 export interface Summary {

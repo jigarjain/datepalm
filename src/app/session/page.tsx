@@ -380,7 +380,11 @@ export default function SessionPage() {
     addSummary(summary);
     setIsSummarising(false);
 
-    router.push("/summary");
+    if (userData?.email) {
+      router.push("/summary");
+    } else {
+      router.push("/em-capture");
+    }
   }
 
   function getActionAttributes(

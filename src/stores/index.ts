@@ -6,6 +6,7 @@ export interface UserDataState {
   userData: UserData | null;
   setUserName: (name: string) => void;
   setPartnerName: (partnerName: string) => void;
+  setEmail: (email: string) => void;
 }
 
 const userDataStore: StateCreator<UserDataState> = (set) => ({
@@ -15,7 +16,9 @@ const userDataStore: StateCreator<UserDataState> = (set) => ({
   setPartnerName: (partnerName: string) =>
     set((state) => ({
       userData: { ...state.userData, partnerName } as UserData
-    }))
+    })),
+  setEmail: (email: string) =>
+    set((state) => ({ userData: { ...state.userData, email } as UserData }))
 });
 
 export interface SummaryState {

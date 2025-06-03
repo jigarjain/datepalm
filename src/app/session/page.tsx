@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Summary, UserData } from "@/types";
 import { RootState, useStore } from "@/stores";
+import { SESSION_PROMPT } from "@/prompts/session";
 
 export type Messages = {
   role: "user" | "assistant";
@@ -11,12 +12,12 @@ export type Messages = {
 };
 
 function getInstructionsForAssistant(userData: UserData) {
-  return `
-    You are a relationship coach.
-    You are helping ${userData?.name} who is in a relationship with ${userData?.partnerName} to improve their relationship.
-    Firstly, greet the user by addressing them by name & introduce yourself.
-    Keep your introductory message short and concise. Introduce yourself as a relationship coach and ask the user to start the conversation by clicking on the "Start Recording" button below
-  `;
+  const prompt = SESSION_PROMPT.replace("{user_name}", userData?.name).replace(
+    "{partner_name}",
+    userData?.partnerName
+  );
+
+  return prompt;
 }
 
 export default function SessionPage() {

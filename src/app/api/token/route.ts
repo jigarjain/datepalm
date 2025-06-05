@@ -9,7 +9,7 @@ export async function POST() {
   try {
     const session = await openai.beta.realtime.sessions.create({
       model: "gpt-4o-realtime-preview",
-      voice: "sage",
+      voice: "shimmer",
       input_audio_transcription: {
         model: "whisper-1"
       }

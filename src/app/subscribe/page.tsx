@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useStore } from "@/stores";
 
-export default function EmailCapture() {
+export default function SubscribePage() {
   const userData = useStore((state) => state.userData);
   const setEmail = useStore((state) => state.setEmail);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -23,7 +23,7 @@ export default function EmailCapture() {
     setIsSubmitting(true);
 
     try {
-      const response = await fetch("/api/emcapture", {
+      const response = await fetch("/api/subscribe", {
         method: "POST",
         body: JSON.stringify({
           email,
@@ -37,7 +37,7 @@ export default function EmailCapture() {
 
       setEmail(email);
       // Redirect to main page
-      router.push("/summary");
+      router.push("/summaries");
     } catch (error) {
       console.error("Error capturing email:", error);
       setError("Something went wrong. Please try again.");

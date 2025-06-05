@@ -29,7 +29,6 @@ export default function SessionPage() {
   const [messages, setMessages] = useState<Messages[]>([]);
   const [isSummarising, setIsSummarising] = useState(false);
   const [dataChannel, setDataChannel] = useState<RTCDataChannel | null>(null);
-  const [hasAudioChunks, setHasAudioChunks] = useState(false);
   const peerConnection = useRef<RTCPeerConnection | null>(null);
   const audioElement = useRef<HTMLAudioElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -41,6 +40,16 @@ export default function SessionPage() {
 
   useEffect(() => {
     handleStartSession();
+
+    return () => {
+      // cleanup
+      if (audioElement.current) {
+        audioElement.current.pause();
+        audioElement.current.srcObject = null;
+        audioElement.current.remove();
+        audioElement.current = null;
+      }
+    };
   }, []);
 
   // Send a message to the model
@@ -86,15 +95,12 @@ export default function SessionPage() {
         ]);
       }
 
-      if (
-        event.type === "output_audio_buffer.stopped"
-        // || event.type === "response.done"
-      ) {
-        setIsSpeaking(false);
-      }
-
       if (event.type === "output_audio_buffer.started") {
         setIsSpeaking(true);
+      }
+
+      if (event.type === "output_audio_buffer.stopped") {
+        setIsSpeaking(false);
       }
     }
 
@@ -121,23 +127,17 @@ export default function SessionPage() {
           type: "response.create"
         });
         console.log("Assistant triggered");
-      }, 500);
+      }, 300);
     }
 
-    function handleDataChannelClose() {
-      console.log("Data Channel Closed");
-    }
-
-    console.log("Adding DataChannel Listeners");
+    console.log("Adding data channel listeners");
     dataChannel.addEventListener("message", handleDataChannelMessage);
     dataChannel.addEventListener("open", handleDataChannelOpen);
-    dataChannel.addEventListener("close", handleDataChannelClose);
 
     return () => {
-      console.log("Removing DataChannel Listeners");
+      console.log("Removing data channel listeners");
       dataChannel.removeEventListener("message", handleDataChannelMessage);
       dataChannel.removeEventListener("open", handleDataChannelOpen);
-      dataChannel.removeEventListener("close", handleDataChannelClose);
     };
   }, [dataChannel, sendClientEvent, setMessages]);
 
@@ -148,7 +148,7 @@ export default function SessionPage() {
     }
   }, [messages]);
 
-  const handleStartSession = useCallback(async () => {
+  async function handleStartSession() {
     try {
       if (!isSessionStarted && !peerConnection.current) {
         console.log("Starting session");
@@ -204,14 +204,15 @@ export default function SessionPage() {
           sdp: await sdpResponse.text()
         };
 
+        console.log("Setting remote description");
         await pc.setRemoteDescription(answer);
-        console.log("Set remote description");
+
         console.log("Session started");
       }
     } catch (err) {
       console.error("Error starting session:", err);
     }
-  }, [isSessionStarted, peerConnection]);
+  }
 
   function handleStopSession() {
     if (dataChannel) {
@@ -241,7 +242,6 @@ export default function SessionPage() {
 
   async function handleStartRecording() {
     audioChunksRef.current = [];
-    setHasAudioChunks(false);
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         sampleRate: 24000,
@@ -258,23 +258,20 @@ export default function SessionPage() {
     });
 
     mediaRecorder.ondataavailable = (event: BlobEvent) => {
+      console.log("mediaRecorder:ondataavailable event triggered");
       if (event.data.size > 0) {
         audioChunksRef.current.push(event.data);
       }
     };
 
-    mediaRecorder.onstop = () => {
-      if (audioChunksRef.current.length > 0) {
-        setHasAudioChunks(true);
-      }
-    };
-
     mediaRecorder.start();
     mediaRecorderRef.current = mediaRecorder;
+    console.log("mediaRecorder started recording");
     setIsRecording(true);
   }
 
   function handleStopRecording() {
+    setIsRecording(false);
     if (!mediaRecorderRef.current) return;
 
     mediaRecorderRef.current.stop(); // This will trigger the 'onstop' event handler
@@ -284,13 +281,17 @@ export default function SessionPage() {
       .getTracks()
       .forEach((track) => track.stop());
 
-    setIsRecording(false);
-
-    console.log("Stopped recording");
+    console.log("mediaRecorder stopped recording");
   }
 
   async function handleSendMessage() {
     setIsSendingAudio(true);
+    handleStopRecording();
+    // Added await to ensure the recording is stopped & the onstop event is triggered
+    // This is a workaround to ensure the audioChunksRef.current has the recorded data
+    // from the onstop event
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
     const audioBlob = new Blob(audioChunksRef.current, {
       type: mediaRecorderRef.current?.mimeType || "audio/webm"
     });
@@ -303,10 +304,6 @@ export default function SessionPage() {
     // Calculate chunk size to stay under 32KB
     const maxBytesPerChunk = 32 * 1024; // 32KB
     const samplesPerChunk = Math.floor(maxBytesPerChunk / 2.67); // Account for base64 overhead
-
-    console.log(
-      `Audio length: ${channelData.length} samples, chunking into ${samplesPerChunk} sample chunks`
-    );
 
     for (let i = 0; i < channelData.length; i += samplesPerChunk) {
       const chunk = channelData.slice(i, i + samplesPerChunk);
@@ -322,10 +319,6 @@ export default function SessionPage() {
           (data, byte) => data + String.fromCharCode(byte),
           ""
         )
-      );
-
-      console.log(
-        `Sending chunk ${Math.floor(i / samplesPerChunk) + 1}, size: ${base64Chunk.length} bytes`
       );
 
       sendClientEvent({
@@ -345,8 +338,8 @@ export default function SessionPage() {
     });
 
     audioChunksRef.current = [];
-    setHasAudioChunks(false);
     setIsSendingAudio(false);
+    console.log("Recorded audio sent");
   }
 
   async function handleSummariseConversation() {
@@ -382,61 +375,33 @@ export default function SessionPage() {
     setIsSummarising(false);
 
     if (userData?.email) {
-      router.push("/summary");
+      router.push("/summaries");
     } else {
-      router.push("/em-capture");
+      router.push("/subscribe");
     }
   }
 
-  function getActionAttributes(
-    isRecording: boolean,
-    isSpeaking: boolean,
-    hasAudioChunks: boolean,
-    handleSendMessage: () => void,
-    handleStartRecording: () => void,
-    handleStopRecording: () => void
-  ) {
-    const buttons = [];
+  const actionButtons = [];
 
-    if (hasAudioChunks && !isRecording) {
-      buttons.push({
-        onClick: handleSendMessage,
-        className: "btn btn-success btn-wide",
-        label: "Send Response",
-        disabled: isSendingAudio
-      });
-    }
-
-    if (isRecording) {
-      buttons.push({
-        onClick: handleStopRecording,
-        className: "btn btn-neutral",
-        label: "Stop Recording",
-        disabled: false
-      });
-    }
-
-    if (!isRecording && !hasAudioChunks) {
-      buttons.push({
-        onClick: handleStartRecording,
-        className: "btn btn-neutral",
-        label: "Start Recording",
-        disabled:
-          (!isSessionActive && isSessionStarted) || isSpeaking || isSendingAudio
-      });
-    }
-
-    return buttons;
+  if (!isRecording && !isSendingAudio) {
+    actionButtons.push({
+      onClick: handleStartRecording,
+      className: "btn btn-neutral",
+      label: "Start Recording",
+      disabled:
+        (!isSessionActive && isSessionStarted) ||
+        isSpeaking ||
+        isSendingAudio ||
+        isSummarising
+    });
+  } else {
+    actionButtons.push({
+      onClick: handleSendMessage,
+      className: "btn btn-success btn-wide",
+      label: "Send Response",
+      disabled: isSendingAudio
+    });
   }
-
-  const actionAttributes = getActionAttributes(
-    isRecording,
-    isSpeaking,
-    hasAudioChunks,
-    handleSendMessage,
-    handleStartRecording,
-    handleStopRecording
-  );
 
   return (
     <div className="flex flex-col justify-between h-full">
@@ -502,7 +467,7 @@ export default function SessionPage() {
         )}
         <div className="bg-base-100 p-4 border-t border-base-300 text-center">
           <div className="flex w-full justify-evenly">
-            {actionAttributes.map((action, index) => (
+            {actionButtons.map((action, index) => (
               <button
                 key={index}
                 onClick={action.onClick}

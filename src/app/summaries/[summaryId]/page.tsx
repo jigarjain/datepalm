@@ -83,7 +83,7 @@ export default function SummaryPage() {
       {getNextSteps(summary.next_steps)}
       <div>
         <Link
-          href={`/session?summary=${summary.id}`}
+          href={`/session?summaryId=${summary.id}`}
           className="btn btn-primary"
         >
           Continue this Session

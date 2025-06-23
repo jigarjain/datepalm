@@ -21,8 +21,8 @@ export default function Home() {
   };
 
   return (
-    <form action={handleSubmit} className="h-full flex flex-col p-4">
-      <div className="flex-1">
+    <form action={handleSubmit} className="h-full flex flex-col p-4 relative">
+      <div className="flex-1 pb-32">
         <div className="flex flex-col items-center">
           <div>
             <h3 className="text-xl font-bold text-base-content">
@@ -48,7 +48,7 @@ export default function Home() {
           </div>
         </div>
       </div>
-      <div className="w-full p-4 mt-auto text-center border-t border-base-300 ">
+      <div className="fixed bottom-0 left-1/2 transform -translate-x-1/2 w-full max-w-lg bg-base-100 border-t border-base-300 p-4 text-center">
         <button className="btn btn-neutral btn-wide" type="submit">
           Next
         </button>

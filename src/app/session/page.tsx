@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Summary, UserData } from "@/types";
 import { RootState, useStore } from "@/stores";
 import { SESSION_PROMPT } from "@/prompts/session";
@@ -11,16 +11,31 @@ export type Messages = {
   content: string;
 };
 
-function getInstructionsForAssistant(userData: UserData) {
-  const prompt = SESSION_PROMPT.replace("{user_name}", userData?.name).replace(
+function getInstructionsForAssistant(
+  userData: UserData,
+  summary: Summary | null
+) {
+  let prompt = SESSION_PROMPT.replace("{user_name}", userData?.name).replace(
     "{partner_name}",
     userData?.partnerName
   );
 
+  if (summary) {
+    const summaryForAI = {
+      title: summary.title,
+      summary: summary.summary,
+      key_points: summary.key_points,
+      action_items: summary.action_items,
+      next_steps: summary.next_steps
+    };
+
+    prompt += `\n\nHere is the summary of the previous conversation so far in json stringified format: ${JSON.stringify(summaryForAI)}`;
+  }
+
   return prompt;
 }
 
-export default function SessionPage() {
+function SessionPageContent() {
   const [isSessionStarted, setIsSessionStarted] = useState(false);
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -37,6 +52,10 @@ export default function SessionPage() {
   const router = useRouter();
   const userData = useStore((state: RootState) => state.userData);
   const addSummary = useStore((state: RootState) => state.addSummary);
+  const searchParams = useSearchParams();
+  const summaryId = searchParams.get("summaryId");
+  const summary =
+    useStore((state: RootState) => state.getSummary(summaryId || "")) || null;
 
   useEffect(() => {
     handleStartSession();
@@ -110,7 +129,7 @@ export default function SessionPage() {
       const sessionUpdate = {
         type: "session.update",
         session: {
-          instructions: getInstructionsForAssistant(userData!),
+          instructions: getInstructionsForAssistant(userData!, summary),
           modalities: ["text", "audio"],
           turn_detection: null,
           input_audio_transcription: {
@@ -407,7 +426,7 @@ export default function SessionPage() {
     <div className="flex flex-col justify-between h-full">
       {/* Scrollable AI content */}
       <div
-        className="flex flex-col flex-1 overflow-y-auto"
+        className="flex flex-col flex-1 overflow-y-auto pb-34"
         ref={chatContainerRef}
       >
         {!isSessionActive && isSessionStarted && (
@@ -465,8 +484,8 @@ export default function SessionPage() {
             Relatable is speaking...
           </div>
         )}
-        <div className="bg-base-100 p-4 border-t border-base-300 text-center">
-          <div className="flex w-full justify-evenly">
+        <div className="fixed bottom-0 left-1/2 transform -translate-x-1/2 w-full max-w-lg bg-base-100 border-t border-base-300 p-4 text-center">
+          <div className="flex justify-evenly">
             {actionButtons.map((action, index) => (
               <button
                 key={index}
@@ -489,5 +508,13 @@ export default function SessionPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function SessionPage() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <SessionPageContent />
+    </Suspense>
   );
 }

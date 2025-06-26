@@ -4,7 +4,9 @@ import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Summary, UserData } from "@/types";
 import { RootState, useStore } from "@/stores";
-import { SESSION_PROMPT } from "@/prompts/session";
+import prompt1 from "@/prompts/prompt1.txt";
+import prompt2 from "@/prompts/prompt2.txt";
+import prompt3 from "@/prompts/prompt3.txt";
 
 export type Messages = {
   role: "user" | "assistant";
@@ -13,12 +15,21 @@ export type Messages = {
 
 function getInstructionsForAssistant(
   userData: UserData,
-  summary: Summary | null
+  summary: Summary | null,
+  prompt: string
 ) {
-  let prompt = SESSION_PROMPT.replace("{user_name}", userData?.name).replace(
-    "{partner_name}",
-    userData?.partnerName
-  );
+  const promptFile =
+    prompt === "1"
+      ? prompt1
+      : prompt === "2"
+        ? prompt2
+        : prompt === "3"
+          ? prompt3
+          : prompt1;
+
+  let promptStr = promptFile
+    .replace("{user_name}", userData?.name)
+    .replace("{partner_name}", userData?.partnerName);
 
   if (summary) {
     const summaryForAI = {
@@ -29,10 +40,10 @@ function getInstructionsForAssistant(
       next_steps: summary.next_steps
     };
 
-    prompt += `\n\nHere is the summary of the previous conversation so far in json stringified format: ${JSON.stringify(summaryForAI)}`;
+    promptStr += `\n\nHere is the summary of the previous conversation so far in json stringified format: ${JSON.stringify(summaryForAI)}`;
   }
 
-  return prompt;
+  return promptStr;
 }
 
 function SessionPageContent() {
@@ -54,6 +65,7 @@ function SessionPageContent() {
   const addSummary = useStore((state: RootState) => state.addSummary);
   const searchParams = useSearchParams();
   const summaryId = searchParams.get("summaryId");
+  const prompt = searchParams.get("prompt");
   const summary =
     useStore((state: RootState) => state.getSummary(summaryId || "")) || null;
 
@@ -129,7 +141,11 @@ function SessionPageContent() {
       const sessionUpdate = {
         type: "session.update",
         session: {
-          instructions: getInstructionsForAssistant(userData!, summary),
+          instructions: getInstructionsForAssistant(
+            userData!,
+            summary,
+            prompt || "1"
+          ),
           modalities: ["text", "audio"],
           turn_detection: null,
           input_audio_transcription: {
